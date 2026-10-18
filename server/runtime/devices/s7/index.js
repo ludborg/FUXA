@@ -27,6 +27,8 @@ function S7client(_data, _logger, _events, _runtime) {
     var mixItemsMap = {};               // E/I/A/Q/M Mapped Signale name to find for read in polling and set value
     var overloading = 0;                // Overloading counter to mange the break connection
     var lastTimestampValue;             // Last Timestamp of asked values
+    // Read-only switch: with FUXA_S7_READONLY=1 (or true) this driver never writes to the PLC
+    var readOnly = ['1', 'true'].includes(String(process.env.FUXA_S7_READONLY).toLowerCase());
 
     /**
      * Connect to PLC
@@ -230,6 +232,10 @@ function S7client(_data, _logger, _events, _runtime) {
      * Read the current Tag object, write the value in object and send to SPS
      */
     this.setValue = async function (sigid, value) {
+        if (readOnly) {
+            logger.warn(`'${data.name}' setValue(${sigid}) refused: driver is read-only (FUXA_S7_READONLY)`);
+            return false;
+        }
         var item = _getTagItem(data.tags[sigid]);
         if (item) {
             value = await deviceUtils.tagRawCalculator(value, data.tags[sigid], runtime);
@@ -515,6 +521,7 @@ function S7client(_data, _logger, _events, _runtime) {
      */
     var _writeDB = function (DBNr, vars) {
         return new Promise((resolve, reject) => {
+            if (readOnly) return reject(new Error('S7 driver is read-only (FUXA_S7_READONLY)'));
             if (vars.length === 0) return resolve([]);
             let end = 0;
             let offset = Number.MAX_SAFE_INTEGER;
@@ -552,6 +559,7 @@ function S7client(_data, _logger, _events, _runtime) {
             Data: datatypes[v.type].formatter(parseFloat(v.value))
         }));
         return new Promise((resolve, reject) => {
+            if (readOnly) return reject(new Error('S7 driver is read-only (FUXA_S7_READONLY)'));
             s7client.WriteMultiVars(toWrite, (err, res) => {
                 if (err) return reject(_getErr(err));
                 let errs = [];
