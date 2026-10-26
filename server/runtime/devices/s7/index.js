@@ -7,7 +7,8 @@ var datatypes;
 const utils = require('../../utils');
 const deviceUtils = require('../device-utils');
 
-const MAX_MIX_ITEM = 20;
+const MAX_MIX_ITEM = 20;                // snap7 ReadMultiVars limit (MaxVars)
+const MIN_PDU = 240;                    // smallest PDU negotiated by S7 CPUs (e.g. S7-300 31x)
 
 function S7client(_data, _logger, _events, _runtime) {
 
@@ -109,7 +110,7 @@ function S7client(_data, _logger, _events, _runtime) {
                 readVarsfnc.push(_readDB(parseInt(dbnum), Object.values(db[dbnum].Items)));
             }
             if (Object.keys(mixItemsMap).length) {
-                utils.chunkArray(Object.values(mixItemsMap), MAX_MIX_ITEM).forEach((chunk) => {
+                _chunkMixItems(Object.values(mixItemsMap)).forEach((chunk) => {
                     readVarsfnc.push(_readVars(chunk));
                 })
             }
@@ -470,6 +471,38 @@ function S7client(_data, _logger, _events, _runtime) {
                 resolve(vars);
             });
         });
+    }
+
+    /**
+     * Split the E/I/A/Q/M items in ReadMultiVars requests that fit the negotiated PDU
+     * Request: 12 bytes (header + function/count) + 12 bytes per item
+     * Response: 14 bytes (header + function/count) + 4 bytes per item + data (padded to even length)
+     * With a 240 bytes PDU (S7-300) a request can carry 19 items, not 20
+     * @param {array} items - mixItemsMap values
+     */
+    var _chunkMixItems = function (items) {
+        let pdu = 0;
+        try {
+            pdu = s7client.PDULength();
+        } catch { }
+        if (!pdu || pdu < MIN_PDU) pdu = MIN_PDU;
+        const chunks = [];
+        let chunk = [], reqSize = 12, resSize = 14;
+        items.forEach(v => {
+            const bytes = (datatypes[v.type] && datatypes[v.type].bytes) || 4;
+            const itemRes = 4 + bytes + (bytes % 2);
+            if (chunk.length && (chunk.length >= MAX_MIX_ITEM || reqSize + 12 > pdu || resSize + itemRes > pdu)) {
+                chunks.push(chunk);
+                chunk = [];
+                reqSize = 12;
+                resSize = 14;
+            }
+            chunk.push(v);
+            reqSize += 12;
+            resSize += itemRes;
+        });
+        if (chunk.length) chunks.push(chunk);
+        return chunks;
     }
 
     /**
